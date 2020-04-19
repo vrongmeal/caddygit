@@ -36,7 +36,7 @@ func main() {
 
 ## API structure
 
-```json
+```jsonc
 {
     // Your caddy apps.
 	"apps": {
