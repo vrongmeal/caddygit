@@ -1,9 +1,9 @@
-// Package repository defines a git repository.
-package repository
+package client
 
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -12,8 +12,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
-
-	"github.com/vrongmeal/caddygit/utils"
+	"github.com/go-git/go-git/v5/storage/memory"
 )
 
 // Defaults.
@@ -24,8 +23,8 @@ const (
 
 var errNoTag = errors.New("no tag found")
 
-// Opts are the options for creating a repository.
-type Opts struct {
+// RepositoryOpts are the options for creating a repository.
+type RepositoryOpts struct {
 	// URL (HTTP only) of the git repository.
 	URL string `json:"url,omitempty"`
 
@@ -34,24 +33,15 @@ type Opts struct {
 	// not exist, it creates a repo in that path.
 	Path string `json:"path,omitempty"`
 
-	// Remote name. Defaults to "origin".
-	Remote string `json:"remote,omitempty"`
-
-	// Branch (or tag) of the repository to clone. Defaults to `master` if nothing is provided.
-	// Can be set using placeholders:
-	//  `{git.ref.branch.<branch>}` for branch name. Equivalent to `<branch>`.
-	//  `{git.ref.branch.<branch>.latest_commit}` is same as above.
-	//  `{git.ref.latest_commit}` is same as above for default branch. Equivalent to empty string.
-	//  `{git.ref.branch.<branch>.latest_tag}` fetches latest tag for given branch.
-	//  `{git.ref.latest_tag}` is same as above for default branch.
-	//  `{git.ref.tag.<tag>}` for tag name.
+	// Branch (or tag) of the repository to clone. Defaults to `master` if
+	// nothing is provided.
 	Branch string `json:"branch,omitempty"`
 
 	// Username and Password for authentication of private repositories.
 	// If authenticating via access token, set the password equal to the value of
 	// access token and username can be omitted.
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
+	Username string `json:"auth_user,omitempty"`
+	Password string `json:"auth_secret,omitempty"`
 
 	// SingleBranch specifies whether to clone only the specified branch.
 	SingleBranch bool `json:"single_branch,omitempty"`
@@ -67,49 +57,22 @@ type Repository struct {
 
 	url            string
 	path           string
-	remoteName     string
+	branch         string
 	fetchLatestTag bool
 	refName        plumbing.ReferenceName
 	auth           transport.AuthMethod
 	singleBranch   bool
 	depth          int
-
-	ctx context.Context
 }
 
-// New creates a new repository with given options.
-func New(ctx context.Context, opts *Opts) *Repository {
+// NewRepository creates a new repository with given options.
+func NewRepository(opts *RepositoryOpts) *Repository {
 	r := &Repository{
 		url:          opts.URL,
 		path:         opts.Path,
+		branch:       opts.Branch,
 		singleBranch: opts.SingleBranch,
 		depth:        opts.Depth,
-		ctx:          ctx,
-	}
-
-	r.remoteName = DefaultRemote
-	if opts.Remote != "" {
-		r.remoteName = opts.Remote
-	}
-
-	ref := utils.ReferenceName(opts.Branch)
-	if !ref.IsValid() {
-		branch := DefaultBranch
-		if opts.Branch != "" {
-			branch = opts.Branch
-		}
-		r.refName = plumbing.NewBranchReferenceName(branch)
-	} else {
-		r.fetchLatestTag = ref.IsLatestTag()
-		if ref.IsTag() {
-			r.refName = plumbing.NewTagReferenceName(ref.Name())
-		} else { // whether latest commit or latest tag
-			branch := DefaultBranch
-			if ref.Name() != "" {
-				branch = ref.Name()
-			}
-			r.refName = plumbing.NewBranchReferenceName(branch)
-		}
 	}
 
 	if opts.Username == "" && opts.Password == "" {
@@ -130,8 +93,13 @@ func New(ctx context.Context, opts *Opts) *Repository {
 }
 
 // Setup initializes the git repository by either cloning or opening it.
-func (r *Repository) Setup() error {
+func (r *Repository) Setup(ctx context.Context) error {
 	var err error
+
+	err = r.setRef(ctx)
+	if err != nil {
+		return err
+	}
 
 	// Try and open the repository first. If it opens successfully, we can
 	// just configure the remote and continue.
@@ -139,13 +107,13 @@ func (r *Repository) Setup() error {
 	if err == nil {
 		// If the repository already exists, set the remote to provided URL
 		// Delete the old remote URL first and add the new remote
-		err = r.repo.DeleteRemote(r.remoteName)
+		err = r.repo.DeleteRemote(DefaultRemote)
 		if err != nil && err != git.ErrRemoteNotFound {
 			return err
 		}
 
 		_, err = r.repo.CreateRemote(&config.RemoteConfig{
-			Name: r.remoteName,
+			Name: DefaultRemote,
 			URLs: []string{r.url},
 		})
 		if err != nil {
@@ -154,8 +122,8 @@ func (r *Repository) Setup() error {
 
 		// Fetch and checkout to the given branch once so that pulls
 		// are synchronous.
-		err = r.fetch()
-		if err != nil {
+		err = r.fetch(ctx)
+		if err != nil && err != git.NoErrAlreadyUpToDate {
 			return err
 		}
 
@@ -169,10 +137,10 @@ func (r *Repository) Setup() error {
 		return err
 	}
 
-	r.repo, err = git.PlainCloneContext(r.ctx, r.path, false, &git.CloneOptions{
+	r.repo, err = git.PlainCloneContext(ctx, r.path, false, &git.CloneOptions{
 		URL:           r.url,
 		Auth:          r.auth,
-		RemoteName:    r.remoteName,
+		RemoteName:    DefaultRemote,
 		ReferenceName: r.refName,
 		SingleBranch:  r.singleBranch,
 		Depth:         r.depth,
@@ -185,37 +153,81 @@ func (r *Repository) Setup() error {
 	return nil
 }
 
-// Update pulls/fetches updates from the remote repository into current worktree.
-func (r *Repository) Update() error {
-	// If the tag is specified to be "{latest}", get the latest tag
-	// and checkout to it.
-	if r.fetchLatestTag {
-		tag, err := r.getLatestTag()
-		switch err {
-		case nil:
-			return r.checkout(tag)
-		case errNoTag:
-			// do nothing
-		default:
-			return err
+func (r *Repository) setRef(ctx context.Context) error {
+	// First we fetch the references from remote and then compare it to
+	// both the branch reference name and tag reference name. The reference
+	// name that matches first is selected (preferably branch).
+	remote := git.NewRemote(memory.NewStorage(), &config.RemoteConfig{
+		Name: DefaultRemote,
+		URLs: []string{r.url},
+	})
+
+	if err := remote.FetchContext(ctx, &git.FetchOptions{
+		RemoteName: DefaultRemote,
+		Depth:      r.depth,
+		Auth:       r.auth,
+		Tags:       git.AllTags,
+	}); err != nil && err != git.NoErrAlreadyUpToDate {
+		return err
+	}
+
+	refs, err := remote.List(&git.ListOptions{Auth: r.auth})
+	if err != nil {
+		return err
+	}
+
+	if r.branch == "" {
+		r.refName = plumbing.NewBranchReferenceName(DefaultBranch)
+	} else {
+		branchRef := plumbing.NewBranchReferenceName(r.branch)
+		tagRef := plumbing.NewTagReferenceName(r.branch)
+
+		for _, ref := range refs {
+			if ref.Name() == branchRef {
+				r.refName = branchRef
+				break
+			}
+			if ref.Name() == tagRef {
+				r.refName = tagRef
+				break
+			}
 		}
-	} else if r.refName.IsBranch() { // If the ref is branch instead of tag.
-		if err := r.pull(); err != nil {
-			return err
+
+		if r.refName == plumbing.ReferenceName("") {
+			return fmt.Errorf("reference with name '%s' not found", r.branch)
 		}
-	} // else do nothing as given reference is a specific tag.
+	}
 
 	return nil
 }
 
-func (r *Repository) pull() error {
+// Update pulls/fetches updates from the remote repository into current worktree.
+func (r *Repository) Update(ctx context.Context) error {
+	if r.fetchLatestTag {
+		lt, err := r.getLatestTag(ctx)
+		if err != nil {
+			return err
+		}
+		return r.checkout(lt)
+	}
+
+	if r.refName.IsBranch() {
+		if err := r.pull(ctx); err != nil {
+			return err
+		}
+	}
+
+	return git.NoErrAlreadyUpToDate
+}
+
+func (r *Repository) pull(ctx context.Context) error {
 	wtree, err := r.repo.Worktree()
 	if err != nil {
 		return err
 	}
 
-	if err := wtree.PullContext(r.ctx, &git.PullOptions{
-		RemoteName:    r.remoteName,
+	if err := wtree.PullContext(ctx, &git.PullOptions{
+		RemoteName:    DefaultRemote,
 		ReferenceName: r.refName,
 		SingleBranch:  r.singleBranch,
 		Depth:         r.depth,
@@ -227,9 +239,9 @@ func (r *Repository) pull() error {
 	return nil
 }
 
-func (r *Repository) fetch() error {
-	if err := r.repo.FetchContext(r.ctx, &git.FetchOptions{
-		RemoteName: r.remoteName,
+func (r *Repository) fetch(ctx context.Context) error {
+	if err := r.repo.FetchContext(ctx, &git.FetchOptions{
+		RemoteName: DefaultRemote,
 		Depth:      r.depth,
 		Auth:       r.auth,
 		Tags:       git.AllTags,
@@ -253,10 +265,10 @@ func (r *Repository) checkout(ref plumbing.ReferenceName) error {
 	return nil
 }
 
-func (r *Repository) getLatestTag() (plumbing.ReferenceName, error) {
+func (r *Repository) getLatestTag(ctx context.Context) (plumbing.ReferenceName, error) {
 	nilReferenceName := plumbing.ReferenceName("")
 
-	if err := r.fetch(); err != nil {
+	if err := r.fetch(ctx); err != nil {
 		return nilReferenceName, err
 	}
 
