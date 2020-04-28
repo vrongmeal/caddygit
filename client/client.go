@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -84,6 +85,23 @@ func (cl *Client) Provision(ctx caddy.Context, log *zap.Logger, repl *caddy.Repl
 		OnError: func(err error) {
 			log.Warn("cannot run command", zap.Error(err))
 		},
+	}
+
+	if cl.RepositoryOpts.Path == "" {
+		// If the path is set empty for a repo, try to get the repo name from
+		// the URL of the repo. If successful set it to "./<repo-name>" else
+		// set it to current working directory, i.e., ".".
+		if name, err := getRepoNameFromURL(cl.RepositoryOpts.URL); err != nil {
+			cl.RepositoryOpts.Path = "."
+		} else {
+			cl.RepositoryOpts.Path = name
+		}
+	}
+
+	// Get the absolute path (helpful while logging results)
+	cl.RepositoryOpts.Path, err = filepath.Abs(cl.RepositoryOpts.Path)
+	if err != nil {
+		return fmt.Errorf("filepath.Abs(%#v): %v", cl.RepositoryOpts.Path, err)
 	}
 
 	cl.Repo = NewRepository(&cl.RepositoryOpts)
@@ -234,4 +252,16 @@ func isDirEmpty(root string) (bool, error) {
 	}
 
 	return false, err
+}
+
+// getRepoNameFromURL extracts the repo name from the HTTP URL of the repo.
+func getRepoNameFromURL(u string) (string, error) {
+	neturl, err := url.ParseRequestURI(u)
+	if err != nil {
+		return "", err
+	}
+
+	pathSegments := strings.Split(neturl.Path, "/")
+	name := pathSegments[len(pathSegments)-1]
+	return strings.TrimSuffix(name, ".git"), nil
 }
