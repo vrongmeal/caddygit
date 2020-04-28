@@ -35,6 +35,12 @@ type Client struct {
 
 // Provision set's up cl's configuration.
 func (cl *Client) Provision(ctx caddy.Context, log *zap.Logger, repl *caddy.Replacer) error {
+	// set the default service type to poll since it requires only one property,
+	// i.e., interval, which can be easily be set by default
+	if cl.ServiceRaw == nil {
+		cl.ServiceRaw = json.RawMessage(`{"type": "poll"}`)
+	}
+
 	replaceableFields := []*string{
 		&cl.RepositoryOpts.Branch,
 		&cl.RepositoryOpts.Password,
@@ -61,6 +67,13 @@ func (cl *Client) Provision(ctx caddy.Context, log *zap.Logger, repl *caddy.Repl
 	cl.Service, ok = serviceIface.(Service)
 	if !ok {
 		return fmt.Errorf("invalid service configuration")
+	}
+
+	if pollService, ok := cl.Service.(*PollService); ok {
+		if pollService.Interval == 0 {
+			// set default interval equal to 1 hour
+			pollService.Interval = caddy.Duration(1 * time.Hour)
+		}
 	}
 
 	cl.CommandsAfter = &Commander{
@@ -128,8 +141,7 @@ func (cl *Client) Validate() error {
 		return fmt.Errorf("url scheme '%s' not supported", u.Scheme)
 	}
 
-	pollService, ok := cl.Service.(*PollService)
-	if ok {
+	if pollService, ok := cl.Service.(*PollService); ok {
 		if pollService.Interval < caddy.Duration(5*time.Second) {
 			return fmt.Errorf("interval for poll service cannot be less than 5 seconds")
 		}
