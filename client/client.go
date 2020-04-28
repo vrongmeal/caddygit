@@ -164,6 +164,17 @@ func (cl *Client) Start(ctx context.Context, wg *sync.WaitGroup, log *zap.Logger
 		return
 	}
 
+	// When the repo is setup for the first time, always run the commands_after since
+	// they are most probably the setup commands for the repo which might require
+	// building or starting a server.
+	if err := cl.CommandsAfter.Run(ctx); err != nil {
+		log.Error(
+			"cannot run commands",
+			zap.Error(err),
+			zap.String("path", cl.RepositoryOpts.Path))
+		return
+	}
+
 	log.Info("starting service", zap.String("path", cl.RepositoryOpts.Path))
 	for serr := range cl.Service.Start(ctx) {
 		log.Info("updating repository", zap.String("path", cl.RepositoryOpts.Path))
