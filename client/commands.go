@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"os/exec"
+	"syscall"
 )
 
 // Commander runs the given command in order. If a command throws an error,
@@ -63,7 +64,10 @@ func (c *Command) cmd() *exec.Cmd {
 		args = c.Args[1:]
 	}
 
-	return exec.Command(name, args...) // nolint:gosec
+	command := exec.Command(name, args...) // nolint:gosec
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	return command
 }
 
 // String returns the command in a string format.
@@ -74,6 +78,8 @@ func (c *Command) String() string {
 // Execute runs the command with the given context. The process is killed when the
 // context is canceled.
 func (c *Command) Execute(ctx context.Context) error {
+	stream := make(chan error)
+
 	cmd := c.cmd()
 
 	if err := cmd.Start(); err != nil {
@@ -81,8 +87,25 @@ func (c *Command) Execute(ctx context.Context) error {
 	}
 
 	if c.Async {
+		// exit if the process is run asynchronously
 		return nil
 	}
 
-	return cmd.Wait()
+	go func(ex *exec.Cmd, err chan<- error) {
+		err <- ex.Wait()
+	}(cmd, stream)
+
+	select {
+	case <-ctx.Done():
+		// Elegantly close the parent along-with the children.
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if err != nil {
+			return err
+		}
+
+		return ctx.Err()
+
+	case err := <-stream:
+		return err
+	}
 }
