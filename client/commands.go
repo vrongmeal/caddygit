@@ -20,24 +20,26 @@ type Commander struct {
 // Run runs the commands.
 func (c *Commander) Run(ctx context.Context) error {
 	for _, cmd := range c.Commands {
+		if cmd.String() == "" {
+			continue
+		}
+
+		if c.OnStart != nil {
+			c.OnStart(cmd)
+		}
+
+		if err := cmd.Execute(ctx); err != nil {
+			if c.OnError != nil {
+				c.OnError(err)
+			}
+		}
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 
 		default:
-			if cmd.String() == "" {
-				continue
-			}
-
-			if c.OnStart != nil {
-				c.OnStart(cmd)
-			}
-
-			if err := cmd.Execute(ctx); err != nil {
-				if c.OnError != nil {
-					c.OnError(err)
-				}
-			}
+			continue
 		}
 	}
 
