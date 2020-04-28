@@ -217,7 +217,7 @@ func (r *Repository) Update(ctx context.Context) error {
 		}
 	}
 
-	return git.NoErrAlreadyUpToDate
+	return nil
 }
 
 func (r *Repository) pull(ctx context.Context) error {
