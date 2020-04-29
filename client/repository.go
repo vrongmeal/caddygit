@@ -212,12 +212,11 @@ func (r *Repository) Update(ctx context.Context) error {
 	}
 
 	if r.refName.IsBranch() {
-		if err := r.pull(ctx); err != nil {
-			return err
-		}
+		return r.pull(ctx)
 	}
 
-	return nil
+	// If the repo is not to update, it is assumed to be already up to date.
+	return git.NoErrAlreadyUpToDate
 }
 
 func (r *Repository) pull(ctx context.Context) error {
