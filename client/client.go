@@ -195,29 +195,36 @@ func (cl *Client) Start(ctx context.Context, wg *sync.WaitGroup, log *zap.Logger
 
 	log.Info("starting service", zap.String("path", cl.RepositoryOpts.Path))
 	for serr := range cl.Service.Start(ctx) {
-		log.Info("updating repository", zap.String("path", cl.RepositoryOpts.Path))
-		if serr != nil {
-			log.Error(
-				"error updating the service",
-				zap.Error(serr),
-				zap.String("path", cl.RepositoryOpts.Path))
-			continue
-		}
+		select {
+		case <-ctx.Done():
+			// For when update is received just before the context is cancelled
+			return
 
-		if err := cl.Repo.Update(ctx); err != nil {
-			log.Warn(
-				"cannot update repository",
-				zap.Error(err),
-				zap.String("path", cl.RepositoryOpts.Path))
-			continue
-		}
+		default:
+			log.Info("updating repository", zap.String("path", cl.RepositoryOpts.Path))
+			if serr != nil {
+				log.Error(
+					"error updating the service",
+					zap.Error(serr),
+					zap.String("path", cl.RepositoryOpts.Path))
+				continue
+			}
 
-		if err := cl.CommandsAfter.Run(ctx); err != nil {
-			log.Warn(
-				"cannot run commands",
-				zap.Error(err),
-				zap.String("path", cl.RepositoryOpts.Path))
-			continue
+			if err := cl.Repo.Update(ctx); err != nil {
+				log.Warn(
+					"cannot update repository",
+					zap.Error(err),
+					zap.String("path", cl.RepositoryOpts.Path))
+				continue
+			}
+
+			if err := cl.CommandsAfter.Run(ctx); err != nil {
+				log.Warn(
+					"cannot run commands",
+					zap.Error(err),
+					zap.String("path", cl.RepositoryOpts.Path))
+				continue
+			}
 		}
 	}
 }
