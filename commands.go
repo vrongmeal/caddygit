@@ -1,4 +1,4 @@
-package client
+package caddygit
 
 import (
 	"context"
@@ -11,15 +11,25 @@ import (
 // true. An error func can also be provided which is run when there's an
 // error in running command.
 type Commander struct {
-	Commands []Command
+	commands []Command
 
 	OnError func(error)
 	OnStart func(Command)
 }
 
+// AddCommand adds a command into the commander.
+func (c *Commander) AddCommand(cmd Command) {
+	if len(cmd.Args) == 0 {
+		// don't add an empty commands, this causes trouble in future
+		return
+	}
+
+	c.commands = append(c.commands, cmd)
+}
+
 // Run runs the commands.
 func (c *Commander) Run(ctx context.Context) error {
-	for _, cmd := range c.Commands {
+	for _, cmd := range c.commands {
 		if cmd.String() == "" {
 			continue
 		}
@@ -46,7 +56,7 @@ func (c *Commander) Run(ctx context.Context) error {
 	return nil
 }
 
-// Command is the representation of a shell command that can be run asynchronously
+// Command is the representation of a shell command that can be run async
 // or synchronously depending on the async parameter.
 type Command struct {
 	Args  []string `json:"command,omitempty"`
@@ -77,8 +87,8 @@ func (c *Command) String() string {
 	return c.cmd().String()
 }
 
-// Execute runs the command with the given context. The process is killed when the
-// context is canceled.
+// Execute runs the command with the given context. The process is killed
+// when the context is canceled.
 func (c *Command) Execute(ctx context.Context) error {
 	stream := make(chan error)
 

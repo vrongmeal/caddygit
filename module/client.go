@@ -1,4 +1,4 @@
-package client
+package module
 
 import (
 	"context"
@@ -10,12 +10,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/go-git/go-git/v5"
 	"go.uber.org/zap"
+
+	"github.com/vrongmeal/caddygit"
+	"github.com/vrongmeal/caddygit/services/poll"
 )
 
 var (
@@ -25,29 +27,29 @@ var (
 
 // Client contains the configuration for git client repository and service.
 type Client struct {
-	RepositoryOpts RepositoryOpts  `json:"repo,omitempty"`
-	RawCommands    []Command       `json:"commands_after,omitempty"`
-	ServiceRaw     json.RawMessage `json:"service,omitempty" caddy:"namespace=git.services inline_key=type"`
+	RepositoryOpts caddygit.RepositoryOpts `json:"repo,omitempty"`
+	RawCommands    []caddygit.Command      `json:"commands_after,omitempty"`
+	ServiceRaw     json.RawMessage         `json:"service,omitempty" caddy:"namespace=git.services inline_key=type"`
 
-	Repo          *Repository `json:"-"`
-	CommandsAfter *Commander  `json:"-"`
-	Service       Service     `json:"-"`
+	Repo          *caddygit.Repository `json:"-"`
+	CommandsAfter *caddygit.Commander  `json:"-"`
+	Service       caddygit.Service     `json:"-"`
 }
 
 // Provision set's up cl's configuration.
-func (cl *Client) Provision(ctx caddy.Context, log *zap.Logger, repl *caddy.Replacer) error {
+func (c *Client) Provision(ctx caddy.Context, log *zap.Logger, repl *caddy.Replacer) error {
 	// set the default service type to poll since it requires only one property,
 	// i.e., interval, which can be easily be set by default
-	if cl.ServiceRaw == nil {
-		cl.ServiceRaw = json.RawMessage(`{"type": "poll"}`)
+	if c.ServiceRaw == nil {
+		c.ServiceRaw = json.RawMessage(`{"type": "poll"}`)
 	}
 
 	replaceableFields := []*string{
-		&cl.RepositoryOpts.Branch,
-		&cl.RepositoryOpts.Password,
-		&cl.RepositoryOpts.Path,
-		&cl.RepositoryOpts.URL,
-		&cl.RepositoryOpts.Username,
+		&c.RepositoryOpts.Branch,
+		&c.RepositoryOpts.Password,
+		&c.RepositoryOpts.Path,
+		&c.RepositoryOpts.URL,
+		&c.RepositoryOpts.Username,
 	}
 
 	for _, field := range replaceableFields {
@@ -59,71 +61,75 @@ func (cl *Client) Provision(ctx caddy.Context, log *zap.Logger, repl *caddy.Repl
 		*field = actual
 	}
 
-	serviceIface, err := ctx.LoadModule(cl, "ServiceRaw")
+	serviceIface, err := ctx.LoadModule(c, "ServiceRaw")
 	if err != nil {
 		return fmt.Errorf("error loading module: %v", err)
 	}
 
 	var ok bool
-	cl.Service, ok = serviceIface.(Service)
+	c.Service, ok = serviceIface.(caddygit.Service)
 	if !ok {
 		return fmt.Errorf("invalid service configuration")
 	}
 
-	if pollService, ok := cl.Service.(*PollService); ok {
+	if pollService, ok := c.Service.(*poll.Service); ok {
 		if pollService.Interval == 0 {
 			// set default interval equal to 1 hour
 			pollService.Interval = caddy.Duration(1 * time.Hour)
 		}
 	}
 
-	cl.CommandsAfter = &Commander{
-		Commands: cl.RawCommands,
-		OnStart: func(cmd Command) {
+	c.CommandsAfter = &caddygit.Commander{
+		OnStart: func(cmd caddygit.Command) {
 			log.Info("running command", zap.String("cmd", cmd.String()))
 		},
 		OnError: func(err error) {
 			log.Warn("cannot run command", zap.Error(err))
 		},
 	}
+	for i := range c.RawCommands {
+		c.CommandsAfter.AddCommand(c.RawCommands[i])
+	}
 
-	if cl.RepositoryOpts.Path == "" {
+	if c.RepositoryOpts.Path == "" {
 		// If the path is set empty for a repo, try to get the repo name from
 		// the URL of the repo. If successful set it to "./<repo-name>" else
 		// set it to current working directory, i.e., ".".
-		if name, err := getRepoNameFromURL(cl.RepositoryOpts.URL); err != nil {
-			cl.RepositoryOpts.Path = "."
+		var name string
+		name, err = getRepoNameFromURL(c.RepositoryOpts.URL)
+		if err != nil {
+			c.RepositoryOpts.Path = "."
 		} else {
-			cl.RepositoryOpts.Path = name
+			c.RepositoryOpts.Path = name
 		}
 	}
 
 	// Get the absolute path (helpful while logging results)
-	cl.RepositoryOpts.Path, err = filepath.Abs(cl.RepositoryOpts.Path)
+	c.RepositoryOpts.Path, err = filepath.Abs(c.RepositoryOpts.Path)
 	if err != nil {
-		return fmt.Errorf("filepath.Abs(%#v): %v", cl.RepositoryOpts.Path, err)
+		return fmt.Errorf("filepath.Abs(%#v): %v", c.RepositoryOpts.Path, err)
 	}
 
-	cl.Repo = NewRepository(&cl.RepositoryOpts)
+	c.Repo = caddygit.NewRepository(&c.RepositoryOpts)
 
 	return nil
 }
 
 // Validate ensures cl's configuration is valid.
-func (cl *Client) Validate() error {
-	if cl.RepositoryOpts.URL == "" {
+func (c *Client) Validate() error {
+	if c.RepositoryOpts.URL == "" {
 		return fmt.Errorf("cannot create repository with empty URL")
 	}
 
-	if cl.RepositoryOpts.Path == "" {
+	if c.RepositoryOpts.Path == "" {
 		return fmt.Errorf("cannot create repository in empty path")
 	}
 
-	// We check if the path exists or not. If the path doesn't exist, it's validated OK
-	// else we check if it's a git directory by opening it. If the directory doesn't open
-	// successfully, it checks if the directory is empty. For non empty directory it
-	// throws an error.
-	dir, err := isDir(cl.RepositoryOpts.Path)
+	// We check if the path exists or not. If the path doesn't exist, it's
+	// validated OK else we check if it's a git directory by opening it. If the
+	// directory doesn't open successfully, it checks if the directory is empty.
+	// For non empty directory it throws an error.
+	dir, err := isDir(c.RepositoryOpts.Path)
 	if err != nil && err != errInvalidPath {
 		return fmt.Errorf("error validating path: %v", err)
 	} else if err == nil {
@@ -131,10 +137,10 @@ func (cl *Client) Validate() error {
 			return errNotGitDir
 		}
 
-		_, err = git.PlainOpen(cl.RepositoryOpts.Path)
+		_, err = git.PlainOpen(c.RepositoryOpts.Path)
 		if err != nil {
 			if err == git.ErrRepositoryNotExists {
-				empty, err2 := isDirEmpty(cl.RepositoryOpts.Path)
+				empty, err2 := isDirEmpty(c.RepositoryOpts.Path)
 				if err2 != nil {
 					return fmt.Errorf("error validating path: %v", err2)
 				}
@@ -148,7 +154,7 @@ func (cl *Client) Validate() error {
 		}
 	}
 
-	u, err := url.Parse(cl.RepositoryOpts.URL)
+	u, err := url.Parse(c.RepositoryOpts.URL)
 	if err != nil {
 		return fmt.Errorf("invalid url: %v", err)
 	}
@@ -159,7 +165,7 @@ func (cl *Client) Validate() error {
 		return fmt.Errorf("url scheme '%s' not supported", u.Scheme)
 	}
 
-	if pollService, ok := cl.Service.(*PollService); ok {
+	if pollService, ok := c.Service.(*poll.Service); ok {
 		if pollService.Interval < caddy.Duration(5*time.Second) {
 			return fmt.Errorf("interval for poll service cannot be less than 5 seconds")
 		}
@@ -168,67 +174,60 @@ func (cl *Client) Validate() error {
 	return nil
 }
 
-// Start begins the module execution by cloning or opening the repository and
-// starting the service.
-func (cl *Client) Start(ctx context.Context, wg *sync.WaitGroup, log *zap.Logger) {
-	defer wg.Done()
-
-	log.Info("setting up repository", zap.String("path", cl.RepositoryOpts.Path))
-	if err := cl.Repo.Setup(ctx); err != nil {
-		log.Error(
-			"cannot setup repository",
-			zap.Error(err),
-			zap.String("path", cl.RepositoryOpts.Path))
-		return
+// Start begins the module execution by cloning or opening the repository
+// and starting the service.
+func (c *Client) Start(ctx context.Context, log *zap.Logger) error {
+	log.Info("setting up repository", zap.String("path", c.RepositoryOpts.Path))
+	if err := c.Repo.Setup(ctx); err != nil {
+		return fmt.Errorf("cannot setup repository: %v", err)
 	}
 
-	// When the repo is setup for the first time, always run the commands_after since
-	// they are most probably the setup commands for the repo which might require
-	// building or starting a server.
-	if err := cl.CommandsAfter.Run(ctx); err != nil {
-		log.Error(
-			"cannot run commands",
-			zap.Error(err),
-			zap.String("path", cl.RepositoryOpts.Path))
-		return
+	// When the repo is setup for the first time, always run the commands_after
+	// since they are most probably the setup commands for the repo which might
+	// require building or starting a server.
+	if err := c.CommandsAfter.Run(ctx); err != nil {
+		return fmt.Errorf("cannot run commands: %v", err)
 	}
 
-	log.Info("starting service", zap.String("path", cl.RepositoryOpts.Path))
-	for serr := range cl.Service.Start(ctx) {
+	log.Info("starting service", zap.String("path", c.RepositoryOpts.Path))
+	for serr := range c.Service.Start(ctx) {
 		select {
 		case <-ctx.Done():
-			// For when update is received just before the context is cancelled
-			return
+			// For when update is received just before the context is canceled
+			return ctx.Err()
 
 		default:
-			log.Info("updating repository", zap.String("path", cl.RepositoryOpts.Path))
+			log.Info("updating repository", zap.String("path", c.RepositoryOpts.Path))
 			if serr != nil {
 				log.Error(
 					"error updating the service",
 					zap.Error(serr),
-					zap.String("path", cl.RepositoryOpts.Path))
+					zap.String("path", c.RepositoryOpts.Path))
 				continue
 			}
 
-			if err := cl.Repo.Update(ctx); err != nil {
+			if err := c.Repo.Update(ctx); err != nil {
 				log.Warn(
 					"cannot update repository",
 					zap.Error(err),
-					zap.String("path", cl.RepositoryOpts.Path))
+					zap.String("path", c.RepositoryOpts.Path))
 				continue
 			}
 
-			if err := cl.CommandsAfter.Run(ctx); err != nil {
+			if err := c.CommandsAfter.Run(ctx); err != nil {
 				log.Warn(
 					"cannot run commands",
 					zap.Error(err),
-					zap.String("path", cl.RepositoryOpts.Path))
+					zap.String("path", c.RepositoryOpts.Path))
 				continue
 			}
 		}
 	}
+
+	return nil
 }
 
+// isDir tells if root is a directory.
 func isDir(root string) (bool, error) {
 	info, err := os.Stat(root)
 	if err != nil {
@@ -246,6 +245,7 @@ func isDir(root string) (bool, error) {
 	return true, nil
 }
 
+// isDirEmpty tells if root directory is empty.
 func isDirEmpty(root string) (bool, error) {
 	f, err := os.Open(filepath.Clean(root))
 	if err != nil {

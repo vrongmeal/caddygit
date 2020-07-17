@@ -2,10 +2,10 @@
 
 > Git module for Caddy v2
 
-Package caddygit implements a Git Caddy module. This module can be used to deploy
-your website with a simple git push. This module starts a service that runs during
-the lifetime of the server. When the service starts, it clones the repository. While
-the server is still up, it pulls the latest every so often.
+The module is helpful in creating git clients that pull from the given
+repository at regular intervals of time (poll service) or whenever there
+is a change in the repository (webhook service). On a successful pull
+it runs the specified commands to automate deployment.
 
 ## Installation
 
@@ -21,7 +21,7 @@ import (
 
 	// plug in Caddy modules here
     _ "github.com/caddyserver/caddy/v2/modules/standard"
-    _ "github.com/vrongmeal/caddygit" // Yay!!!
+    _ "github.com/vrongmeal/caddygit/module/git" // Yay!!!
 )
 
 func main() {
@@ -32,8 +32,8 @@ func main() {
 **OR** you can use [xcaddy](https://github.com/caddyserver/xcaddy) to build:
 
 ```bash
-$ xcaddy build v2.0.0-rc.1 \
-    --with github.com/vrongmeal/caddygit
+$ xcaddy build v2.1.1 \
+    --with github.com/vrongmeal/caddygit/module/git
 ```
 
 ## API structure

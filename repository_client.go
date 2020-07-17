@@ -1,4 +1,4 @@
-package client
+package caddygit
 
 import (
 	"context"
