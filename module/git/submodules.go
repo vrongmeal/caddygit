@@ -5,4 +5,5 @@ import (
 	_ "github.com/vrongmeal/caddygit/services/poll"
 	_ "github.com/vrongmeal/caddygit/services/webhook"
 	_ "github.com/vrongmeal/caddygit/services/webhook/generic"
+	_ "github.com/vrongmeal/caddygit/services/webhook/github"
 )
