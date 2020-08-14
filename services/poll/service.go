@@ -3,6 +3,7 @@ package poll
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -18,6 +19,8 @@ func init() {
 type Service struct {
 	// Interval after which the service ticks.
 	Interval caddy.Duration `json:"interval,omitempty"`
+
+	tick chan error
 }
 
 // CaddyModule returns the Caddy module information.
@@ -28,15 +31,38 @@ func (*Service) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
+// Provision set's s's configuration for the module.
+func (s *Service) Provision(ctx caddy.Context) error {
+	if s.Interval <= 0 {
+		s.Interval = caddy.Duration(time.Hour)
+	}
+
+	s.tick = make(chan error, 1)
+	return nil
+}
+
+// Validate validates s's configuration.
+func (s *Service) Validate() error {
+	if s.Interval < caddy.Duration(5*time.Second) {
+		return fmt.Errorf(
+			"minimum poll time should be 5 seconds; given %s",
+			time.Duration(s.Interval),
+		)
+	}
+
+	return nil
+}
+
+// ConfigureRepo configures "s" with the repository information.
+func (s *Service) ConfigureRepo(r caddygit.RepositoryInfo) error { return nil }
+
 // Start begins the execution of poll service. It updates the tick stream
 // at regular intervals.
 func (s *Service) Start(ctx context.Context) <-chan error {
-	tick := make(chan error, 1)
-
 	if s.Interval <= 0 {
-		tick <- errors.New("cannot run poll service for non-positive interval")
-		close(tick)
-		return tick
+		s.tick <- errors.New("cannot run poll service for non-positive interval")
+		close(s.tick)
+		return s.tick
 	}
 
 	go func(c context.Context, t chan<- error, interval time.Duration) {
@@ -57,13 +83,15 @@ func (s *Service) Start(ctx context.Context) <-chan error {
 				return
 			}
 		}
-	}(ctx, tick, time.Duration(s.Interval))
+	}(ctx, s.tick, time.Duration(s.Interval))
 
-	return tick
+	return s.tick
 }
 
 // Interface guard.
 var (
-	_ caddygit.Service = (*Service)(nil)
-	_ caddy.Module     = (*Service)(nil)
+	_ caddygit.Service  = (*Service)(nil)
+	_ caddy.Module      = (*Service)(nil)
+	_ caddy.Provisioner = (*Service)(nil)
+	_ caddy.Validator   = (*Service)(nil)
 )

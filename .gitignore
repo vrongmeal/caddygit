@@ -2,3 +2,6 @@ vendor/
 buildenv_*/
 Caddyfile
 caddy.json
+.idea/
+.vscode/
+bin/

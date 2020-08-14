@@ -50,6 +50,18 @@ type RepositoryOpts struct {
 	Depth int `json:"depth,omitempty"`
 }
 
+// RepositoryInfo tells information about the git repository.
+type RepositoryInfo struct {
+	URL  string
+	Path string
+
+	LatestTag     bool
+	ReferenceName plumbing.ReferenceName
+
+	SingleBranch bool
+	Depth        int
+}
+
 // Repository is a git repository in the given `Path` with `Remote` URL
 // equal to `URL`.
 type Repository struct {
@@ -151,6 +163,18 @@ func (r *Repository) Setup(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// Info returns information about the repository.
+func (r *Repository) Info() RepositoryInfo {
+	return RepositoryInfo{
+		URL:           r.url,
+		Path:          r.path,
+		LatestTag:     r.fetchLatestTag,
+		ReferenceName: r.refName,
+		SingleBranch:  r.singleBranch,
+		Depth:         r.depth,
+	}
 }
 
 func (r *Repository) setRef(ctx context.Context) error {

@@ -10,14 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/go-git/go-git/v5"
 	"go.uber.org/zap"
 
 	"github.com/vrongmeal/caddygit"
-	"github.com/vrongmeal/caddygit/services/poll"
 )
 
 var (
@@ -70,13 +68,6 @@ func (c *Client) Provision(ctx caddy.Context, log *zap.Logger, repl *caddy.Repla
 	c.Service, ok = serviceIface.(caddygit.Service)
 	if !ok {
 		return fmt.Errorf("invalid service configuration")
-	}
-
-	if pollService, ok := c.Service.(*poll.Service); ok {
-		if pollService.Interval == 0 {
-			// set default interval equal to 1 hour
-			pollService.Interval = caddy.Duration(1 * time.Hour)
-		}
 	}
 
 	c.CommandsAfter = &caddygit.Commander{
@@ -165,21 +156,20 @@ func (c *Client) Validate() error {
 		return fmt.Errorf("url scheme '%s' not supported", u.Scheme)
 	}
 
-	if pollService, ok := c.Service.(*poll.Service); ok {
-		if pollService.Interval < caddy.Duration(5*time.Second) {
-			return fmt.Errorf("interval for poll service cannot be less than 5 seconds")
-		}
-	}
-
 	return nil
 }
 
-// Start begins the module execution by cloning or opening the repository
-// and starting the service.
-func (c *Client) Start(ctx context.Context, log *zap.Logger) error {
+// Setup initializes the repository and runs the commands the first time
+// before depending upon the service to update it.
+func (c *Client) Setup(ctx context.Context, log *zap.Logger) error {
 	log.Info("setting up repository", zap.String("path", c.RepositoryOpts.Path))
 	if err := c.Repo.Setup(ctx); err != nil {
 		return fmt.Errorf("cannot setup repository: %v", err)
+	}
+
+	// once setup, services can be configured with repository info
+	if err := c.Service.ConfigureRepo(c.Repo.Info()); err != nil {
+		return fmt.Errorf("error configuring service: %v", err)
 	}
 
 	// When the repo is setup for the first time, always run the commands_after
@@ -187,6 +177,32 @@ func (c *Client) Start(ctx context.Context, log *zap.Logger) error {
 	// require building or starting a server.
 	if err := c.CommandsAfter.Run(ctx); err != nil {
 		return fmt.Errorf("cannot run commands: %v", err)
+	}
+
+	return nil
+}
+
+// Update updates the repository and runs the commands if no error is received.
+func (c *Client) Update(ctx context.Context) error {
+	if err := c.Repo.Update(ctx); err != nil {
+		if err == git.NoErrAlreadyUpToDate {
+			// If the repository is up-to-date, no need to run commands
+			// yet there is no error to update as well
+			return nil
+		}
+
+		return err
+	}
+
+	return c.CommandsAfter.Run(ctx)
+}
+
+// Start begins the module execution by cloning or opening the repository
+// and starting the service.
+func (c *Client) Start(ctx context.Context, log *zap.Logger) error {
+	// Setup the repository before starting the service
+	if err := c.Setup(ctx, log); err != nil {
+		return err
 	}
 
 	log.Info("starting service", zap.String("path", c.RepositoryOpts.Path))
@@ -206,17 +222,9 @@ func (c *Client) Start(ctx context.Context, log *zap.Logger) error {
 				continue
 			}
 
-			if err := c.Repo.Update(ctx); err != nil {
-				log.Warn(
+			if err := c.Update(ctx); err != nil {
+				log.Error(
 					"cannot update repository",
-					zap.Error(err),
-					zap.String("path", c.RepositoryOpts.Path))
-				continue
-			}
-
-			if err := c.CommandsAfter.Run(ctx); err != nil {
-				log.Warn(
-					"cannot run commands",
 					zap.Error(err),
 					zap.String("path", c.RepositoryOpts.Path))
 				continue

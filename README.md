@@ -20,8 +20,8 @@ import (
 	caddycmd "github.com/caddyserver/caddy/v2/cmd"
 
 	// plug in Caddy modules here
-    _ "github.com/caddyserver/caddy/v2/modules/standard"
-    _ "github.com/vrongmeal/caddygit/module/git" // Yay!!!
+	_ "github.com/caddyserver/caddy/v2/modules/standard"
+	_ "github.com/vrongmeal/caddygit/module/git" // Yay!!!
 )
 
 func main() {
