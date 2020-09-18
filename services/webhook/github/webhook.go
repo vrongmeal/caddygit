@@ -74,6 +74,7 @@ func (Webhook) Handle(req *http.Request, hc *webhook.HookConf) (int, error) {
 	}
 
 	switch event {
+	case "ping":
 	case "push":
 		var rBody pushBody
 

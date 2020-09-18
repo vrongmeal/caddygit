@@ -38,7 +38,7 @@ type Client struct {
 func (c *Client) Provision(ctx caddy.Context, log *zap.Logger, repl *caddy.Replacer) error {
 	// set the default service type to poll since it requires only one property,
 	// i.e., interval, which can be easily be set by default
-	if c.ServiceRaw == nil {
+	if c.ServiceRaw == nil || string(c.ServiceRaw) == `null` {
 		c.ServiceRaw = json.RawMessage(`{"type": "poll"}`)
 	}
 

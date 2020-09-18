@@ -59,7 +59,7 @@ func (caddyNext) ServeHTTP(w http.ResponseWriter, r *http.Request) error { retur
 
 // Provision sets s's configuration for the module.
 func (s *Service) Provision(ctx caddy.Context) error {
-	if s.HookRaw == nil {
+	if s.HookRaw == nil || string(s.HookRaw) == `null` {
 		s.HookRaw = json.RawMessage(`{"type": "generic"}`)
 	}
 

@@ -41,7 +41,7 @@ $ xcaddy build v2.1.1 \
 ```jsonc
 {
     // Your caddy apps.
-	"apps": {
+    "apps": {
         // Git app module.
         "git": {
             // Your git clients to be deployed.
@@ -78,7 +78,8 @@ $ xcaddy build v2.1.1 \
                     },
                     // Service info.
                     "service": {
-                        // Type of the service. Currently only "poll" supported.
+                        // Type of the service.
+                        // Services supported: poll, webhook
                         "type": "poll",
 
                         // Interval after which service will tick.
@@ -105,4 +106,4 @@ $ xcaddy build v2.1.1 \
 ## TODO:
 
 - [ ] Support for Caddyfile
-- [ ] Webhook service
+- [x] Webhook service
