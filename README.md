@@ -105,5 +105,5 @@ $ xcaddy build v2.1.1 \
 
 ## TODO:
 
-- [ ] Support for Caddyfile
+- [X] Support for Caddyfile
 - [x] Webhook service
