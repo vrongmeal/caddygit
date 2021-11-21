@@ -103,6 +103,24 @@ $ xcaddy build v2.1.1 \
 }
 ```
 
+## Caddyfile
+
+For a seamless transition from [Git module for Caddy v1](https://github.com/abiosoft/caddy-git), support for Caddyfile was added in a similar fashion:
+
+    git repo [path]
+
+For more control use the following syntax:
+
+    git [repo path] {
+        repo        repo
+        path        path
+        branch      branch
+    }
+
+- repo is the URL to the repository
+- path is the path to clone the repository into; default is site root. It can be absolute or relative (to site root).
+- branch is the branch or tag to pull; default is master branch.
+
 ## TODO:
 
 - [X] Support for Caddyfile
