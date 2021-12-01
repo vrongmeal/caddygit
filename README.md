@@ -109,12 +109,20 @@ For a seamless transition from [Git module for Caddy v1](https://github.com/abio
 
     git repo [path]
 
-For more control use the following syntax:
+For more control use the following syntax (bear in mind, this options are different from v1):
 
-    git [repo path] {
-        repo        repo
-        path        path
-        branch      branch
+    git [<repo>] [<path>] {
+        repo|url          <repo>
+        path              <path>
+        branch            <branch>
+        auth_user         <username>
+        auth_secret       <password>
+        single_branch     true|false
+        depth             <depth>
+        service_type      <service type>
+        service_interval  <service interval>
+        command_after     <command>
+        command_async     true|false
     }
 
 - repo is the URL to the repository
