@@ -13,7 +13,13 @@ import (
 )
 
 type CaddyfileSettings struct {
-	Client module.Client
+	Repository  caddygit.RepositoryOpts
+	RawCommands []caddygit.Command
+	ServiceRaw  json.RawMessage
+
+	// Webhook settings
+	HookSecret string
+	HookRaw    json.RawMessage
 }
 
 type ServiceRaw struct {
@@ -40,13 +46,13 @@ func parseGlobalCaddyfileBlock(d *caddyfile.Dispenser, prev interface{}) (interf
 	}
 
 	// Parse directive
-	config, err := newClientFromDispenser(d)
+	client, err := newClientFromDispenser(d)
 	if err != nil {
 		return nil, err
 	}
 
 	// append repo to global git app.
-	git.Clients = append(git.Clients, config.Client)
+	git.Clients = append(git.Clients, client)
 
 	// tell Caddyfile adapter that this is the JSON for an app
 	return httpcaddyfile.App{
@@ -57,15 +63,26 @@ func parseGlobalCaddyfileBlock(d *caddyfile.Dispenser, prev interface{}) (interf
 
 // parseCaddyfileHandlerBlock parses the Caddyfile tokens for the git directive.
 func parseCaddyfileHandlerBlock(h httpcaddyfile.Helper) (caddyhttp.MiddlewareHandler, error) {
-	_, err := newClientFromDispenser(h.Dispenser)
-
-	// TODO: Send this configuration to the App and start the client
-
-	return caddyhttp.VarsMiddleware{"root": "/x"}, err
+	handler, err := newHandlerFromDispenser(h.Dispenser)
+	return &handler, err
 }
 
-func newClientFromDispenser(d *caddyfile.Dispenser) (config CaddyfileSettings, err error) {
+func newClientFromDispenser(d *caddyfile.Dispenser) (client module.Client, err error) {
+	var config CaddyfileSettings
 	err = config.UnmarshalCaddyfile(d)
+	client.RepositoryOpts = config.Repository
+	client.RawCommands = config.RawCommands
+	client.ServiceRaw = config.ServiceRaw
+	return
+}
+
+func newHandlerFromDispenser(d *caddyfile.Dispenser) (handler Handler, err error) {
+	var config CaddyfileSettings
+	err = config.UnmarshalCaddyfile(d)
+	handler.Repository = config.Repository
+	handler.Commands = config.RawCommands
+	handler.Secret = config.HookSecret
+	handler.HookRaw = config.HookRaw
 	return
 }
 
@@ -74,7 +91,7 @@ func newClientFromDispenser(d *caddyfile.Dispenser) (config CaddyfileSettings, e
 //    git repo [path]
 //
 // For more control use the following syntax:
-//    git [<repo>] [<path>] {
+//    git [<matcher>] [<repo>] [<path>] {
 //        repo|url          <repo>
 //        path              <path>
 //        branch            <branch>
@@ -84,6 +101,8 @@ func newClientFromDispenser(d *caddyfile.Dispenser) (config CaddyfileSettings, e
 //        depth             <depth>
 //        service_type      <service type>
 //        service_interval  <service interval>
+//        webhook_secret    <secret>
+//        webhook_service   <service info>
 //        command_after     <command>
 //        command_async     true|false
 //    }
@@ -95,10 +114,10 @@ func (config *CaddyfileSettings) UnmarshalCaddyfile(d *caddyfile.Dispenser) erro
 
 		if d.NextArg() {
 			// Repo URL
-			config.Client.RepositoryOpts.URL = d.Val()
+			config.Repository.URL = d.Val()
 			if d.NextArg() {
 				// Repo location
-				config.Client.RepositoryOpts.Path = d.Val()
+				config.Repository.Path = d.Val()
 				// No more args allowed
 				if d.NextArg() {
 					return d.ArgErr()
@@ -114,15 +133,15 @@ func (config *CaddyfileSettings) UnmarshalCaddyfile(d *caddyfile.Dispenser) erro
 				// Retro-compatibility with Caddy Git v1
 				fallthrough
 			case "url":
-				err = validateStringParamter(d, "repo or url", &config.Client.RepositoryOpts.URL)
+				err = validateStringParamter(d, "repo or url", &config.Repository.URL)
 			case "path":
-				err = validateStringParamter(d, "path", &config.Client.RepositoryOpts.Path)
+				err = validateStringParamter(d, "path", &config.Repository.Path)
 			case "branch":
-				err = validateStringParamter(d, "branch", &config.Client.RepositoryOpts.Branch)
+				err = validateStringParamter(d, "branch", &config.Repository.Branch)
 			case "auth_user":
-				err = validateStringParamter(d, "auth_user", &config.Client.RepositoryOpts.Username)
+				err = validateStringParamter(d, "auth_user", &config.Repository.Username)
 			case "auth_secret":
-				err = validateStringParamter(d, "auth_secret", &config.Client.RepositoryOpts.Password)
+				err = validateStringParamter(d, "auth_secret", &config.Repository.Password)
 			case "single_branch":
 				if !d.NextArg() {
 					return d.ArgErr()
@@ -131,7 +150,7 @@ func (config *CaddyfileSettings) UnmarshalCaddyfile(d *caddyfile.Dispenser) erro
 				if err != nil {
 					return err
 				}
-				config.Client.RepositoryOpts.SingleBranch = b
+				config.Repository.SingleBranch = b
 			case "depth":
 				if !d.NextArg() {
 					return d.ArgErr()
@@ -140,11 +159,17 @@ func (config *CaddyfileSettings) UnmarshalCaddyfile(d *caddyfile.Dispenser) erro
 				if err != nil {
 					return err
 				}
-				config.Client.RepositoryOpts.Depth = int(i)
+				config.Repository.Depth = int(i)
 			case "service_type":
 				err = validateStringParamter(d, "service_type", &serviceConfig.Type)
 			case "service_interval":
 				err = validateStringParamter(d, "service_interval", &serviceConfig.Interval)
+			case "webhook_secret":
+				err = validateStringParamter(d, "webhook_secret", &config.HookSecret)
+			case "webhook_service":
+				var webhook_service string
+				err = validateStringParamter(d, "webhook_service", &webhook_service)
+				config.HookRaw = json.RawMessage(webhook_service)
 			case "command_after":
 				if len(command.Args) > 0 {
 					return d.Err("command_after already specified")
@@ -174,13 +199,13 @@ func (config *CaddyfileSettings) UnmarshalCaddyfile(d *caddyfile.Dispenser) erro
 		}
 
 		// Set ServiceRaw config
-		config.Client.ServiceRaw = caddyconfig.JSON(serviceConfig, nil)
-		if string(config.Client.ServiceRaw) == `{}` {
-			config.Client.ServiceRaw = nil
+		config.ServiceRaw = caddyconfig.JSON(serviceConfig, nil)
+		if string(config.ServiceRaw) == `{}` {
+			config.ServiceRaw = nil
 		}
 
 		// Set command
-		config.Client.RawCommands = []caddygit.Command{command}
+		config.RawCommands = []caddygit.Command{command}
 	}
 
 	return nil
