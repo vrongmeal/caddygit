@@ -1,5 +1,7 @@
 # caddygit
 
+_**NOTE: This repository is no longer maintained. Kindly use [greenpau/caddy-git](https://github.com/greenpau/caddy-git)**_
+
 > Git module for Caddy v2
 
 The module is helpful in creating git clients that pull from the given
